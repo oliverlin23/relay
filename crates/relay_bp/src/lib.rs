@@ -12,5 +12,6 @@ pub mod bipartite_graph;
 pub mod bp;
 pub mod decoder;
 pub mod dem;
+pub mod fusion;
 pub mod observable_decoder;
 pub mod utilities;

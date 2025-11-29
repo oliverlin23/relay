@@ -8,6 +8,8 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
+# Apply NumPy 2.0+ compatibility patch before importing other modules
+from . import compat  # noqa: F401
 
 from .check_matrices import (
     CheckMatrices,

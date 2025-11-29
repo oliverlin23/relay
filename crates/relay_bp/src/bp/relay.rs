@@ -250,6 +250,16 @@ where
             .flush()
             .expect("Unable to write Relay logging data.");
     }
+
+    /// Get posterior ratios as f64 from the inner decoder.
+    pub fn get_posterior_ratios_f64(&self) -> Array1<f64> {
+        self.bp_decoder.get_posterior_ratios_f64()
+    }
+
+    /// Set posterior ratios in the inner decoder.
+    pub fn set_posterior_ratios_f64(&mut self, posterior_ratios: Array1<f64>) {
+        self.bp_decoder.set_posterior_ratios_f64(posterior_ratios);
+    }
 }
 
 impl<N> Decoder for RelayDecoder<N>

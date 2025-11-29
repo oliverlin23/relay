@@ -202,6 +202,34 @@ where
         self.posterior_ratios = self.log_prior_ratios.clone();
     }
 
+    /// Get posterior ratios as f64. Applies inverse scaling if needed.
+    pub fn get_posterior_ratios_f64(&self) -> Array1<f64> {
+        self.posterior_ratios.clone().mapv_into_any(|val| {
+            let posterior = N::to_f64(&val).unwrap();
+            match self.config.data_scale_value {
+                Some(scale_val) => posterior / scale_val,
+                None => posterior,
+            }
+        })
+    }
+
+    /// Set external posterior ratios from f64. Applies scaling if needed.
+    pub fn set_posterior_ratios_f64(&mut self, posterior_ratios: Array1<f64>) {
+        if posterior_ratios.len() != self.check_matrix.cols() {
+            panic!(
+                "Posterior ratios length {} does not match number of variables {}",
+                posterior_ratios.len(),
+                self.check_matrix.cols()
+            );
+        }
+        self.posterior_ratios = match self.config.data_scale_value {
+            Some(scale_val) => {
+                posterior_ratios.mapv_into_any(|v| N::from_f64(scale_val * v).unwrap())
+            }
+            None => posterior_ratios.mapv_into_any(|v| N::from_f64(v).unwrap()),
+        };
+    }
+
     /// Set external memory strengths from f64. Applies scaling if needed.
     pub fn set_memory_strengths_f64(&mut self, memory_strengths: Array1<f64>) {
         self.memory_strengths = match self.config.data_scale_value {
