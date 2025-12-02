@@ -68,6 +68,120 @@ pub fn partition_by_count(total_variables: usize, num_partitions: usize) -> Vec<
     partitions
 }
 
+/// Partition detectors by time rounds for spacetime codes.
+///
+/// Creates partitions where each contains detectors from consecutive rounds.
+/// This naturally produces small boundaries (only errors connecting adjacent
+/// rounds at partition edges) relative to partition volume.
+///
+/// For a spacetime code with N rounds, partitioning by time ensures:
+/// - Partition volume: O(d² × rounds_per_partition)
+/// - Partition boundary: O(d²) - only variables connecting adjacent rounds
+/// - Boundary/volume ratio: O(1/rounds_per_partition) ≈ 0.1 for 10 rounds/partition
+///
+/// # Arguments
+/// * `check_matrix` - Spacetime check matrix (detectors × errors)
+/// * `detectors_per_round` - Number of detectors in each syndrome round
+/// * `rounds_per_partition` - How many consecutive rounds per partition
+///
+/// # Returns
+/// Vector of partitions with small boundary/volume ratios
+///
+/// # Panics
+/// Panics if `detectors_per_round` is zero or doesn't evenly divide total detectors
+///
+/// # Example
+/// ```
+/// use relay_bp::fusion::partition_by_time_rounds;
+/// use relay_bp::decoder::SparseBitMatrix;
+/// use ndarray::array;
+///
+/// // 150 rounds × 72 detectors/round = 10,800 detectors
+/// // Partition into 10-round chunks → 15 partitions
+/// let dense = array![[1, 0], [0, 1]]; // Simplified example
+/// let check_matrix = SparseBitMatrix::from_dense(dense);
+/// let partitions = partition_by_time_rounds(&check_matrix, 1, 1);
+/// assert_eq!(partitions.len(), 2);
+/// ```
+pub fn partition_by_time_rounds(
+    check_matrix: &SparseBitMatrix,
+    detectors_per_round: usize,
+    rounds_per_partition: usize,
+) -> Vec<Partition> {
+    if detectors_per_round == 0 {
+        panic!("detectors_per_round must be > 0");
+    }
+    if rounds_per_partition == 0 {
+        panic!("rounds_per_partition must be > 0");
+    }
+
+    let total_detectors = check_matrix.rows();
+
+    // Validate that detectors divide evenly into rounds
+    if total_detectors % detectors_per_round != 0 {
+        panic!(
+            "Total detectors ({}) is not evenly divisible by detectors_per_round ({})",
+            total_detectors, detectors_per_round
+        );
+    }
+
+    let total_rounds = total_detectors / detectors_per_round;
+    let num_partitions = (total_rounds + rounds_per_partition - 1) / rounds_per_partition;
+
+    let mut partitions = Vec::with_capacity(num_partitions);
+
+    for partition_idx in 0..num_partitions {
+        let start_round = partition_idx * rounds_per_partition;
+        let end_round = std::cmp::min(start_round + rounds_per_partition, total_rounds);
+
+        let start_detector = start_round * detectors_per_round;
+        let end_detector = end_round * detectors_per_round;
+
+        let detector_indices: Vec<usize> = (start_detector..end_detector).collect();
+
+        let variable_indices = extract_connected_variables(check_matrix, &detector_indices);
+
+        partitions.push(Partition {
+            variable_indices,
+            detector_indices,
+        });
+    }
+
+    partitions
+}
+
+/// Extract all error variables connected to a set of detectors.
+///
+/// Iterates through the check matrix to find which error variables (columns)
+/// are connected to any of the specified detectors (rows). This determines
+/// the variable scope of a partition.
+///
+/// # Arguments
+/// * `check_matrix` - Spacetime check matrix (detectors × errors)
+/// * `detector_indices` - List of detector indices to examine
+///
+/// # Returns
+/// Sorted vector of unique variable indices connected to the detectors
+fn extract_connected_variables(
+    check_matrix: &SparseBitMatrix,
+    detector_indices: &[usize],
+) -> Vec<usize> {
+    use std::collections::HashSet;
+
+    let mut variable_set = HashSet::new();
+
+    for &det_idx in detector_indices {
+        let row = check_matrix.outer_view(det_idx).unwrap();
+        for (var_idx, _value) in row.iter() {
+            variable_set.insert(var_idx);
+        }
+    }
+
+    let mut variables: Vec<usize> = variable_set.into_iter().collect();
+    variables.sort();
+    variables
+}
+
 /// Create a check matrix for a given partition.
 ///
 /// This extracts the sub-matrix containing only the variables and detectors
@@ -392,7 +506,7 @@ mod tests {
     use crate::bp::min_sum::MinSumDecoderConfig;
     use crate::bp::relay::RelayDecoderConfig;
     use crate::decoder::Bit;
-    use ndarray::array;
+    use ndarray::{array, Array2};
 
     #[test]
     fn test_partition_by_count() {
@@ -404,6 +518,293 @@ mod tests {
         assert_eq!(partitions[0].variable_indices[499], 499);
         assert_eq!(partitions[1].variable_indices[0], 500);
         assert_eq!(partitions[1].variable_indices[499], 999);
+    }
+
+    #[test]
+    fn test_partition_by_time_rounds_basic() {
+        // Create a simple spacetime check matrix with 4 rounds, 2 detectors/round
+        // Total: 8 detectors × 10 variables
+        // Structure: Each round's detectors connect to a subset of variables
+        // Round 0 (dets 0-1): connects to vars 0,1,2
+        // Round 1 (dets 2-3): connects to vars 2,3,4
+        // Round 2 (dets 4-5): connects to vars 4,5,6
+        // Round 3 (dets 6-7): connects to vars 6,7,8
+        let dense = array![
+            [1, 1, 0, 0, 0, 0, 0, 0, 0, 0], // det 0
+            [0, 0, 1, 0, 0, 0, 0, 0, 0, 0], // det 1
+            [0, 0, 1, 1, 0, 0, 0, 0, 0, 0], // det 2
+            [0, 0, 0, 0, 1, 0, 0, 0, 0, 0], // det 3
+            [0, 0, 0, 0, 1, 1, 0, 0, 0, 0], // det 4
+            [0, 0, 0, 0, 0, 0, 1, 0, 0, 0], // det 5
+            [0, 0, 0, 0, 0, 0, 1, 1, 0, 0], // det 6
+            [0, 0, 0, 0, 0, 0, 0, 0, 1, 0], // det 7
+        ];
+        let check_matrix = SparseBitMatrix::from_dense(dense);
+
+        // Partition by 2 rounds per partition
+        let partitions = partition_by_time_rounds(&check_matrix, 2, 2);
+
+        // Should create 2 partitions (4 rounds / 2 rounds per partition)
+        assert_eq!(partitions.len(), 2);
+
+        // Partition 0: rounds 0-1 (detectors 0-3)
+        assert_eq!(partitions[0].detector_indices, vec![0, 1, 2, 3]);
+        // Should include variables connected to detectors 0-3: vars 0,1,2,3,4
+        assert_eq!(partitions[0].variable_indices, vec![0, 1, 2, 3, 4]);
+
+        // Partition 1: rounds 2-3 (detectors 4-7)
+        assert_eq!(partitions[1].detector_indices, vec![4, 5, 6, 7]);
+        // Should include variables connected to detectors 4-7: vars 4,5,6,7,8
+        assert_eq!(partitions[1].variable_indices, vec![4, 5, 6, 7, 8]);
+
+        // Note: Variable 4 appears in both partitions, it is boundary variable
+    }
+
+    #[test]
+    fn test_partition_by_time_rounds_uneven_rounds() {
+        // Test with 7 rounds, 3 detectors/round, 3 rounds/partition
+        // Total: 21 detectors
+        // Should create 3 partitions: [0-2], [3-5], [6] (last one partial)
+        let mut dense = Array2::<u8>::zeros((21, 30));
+        // Make sure each detector connects to at least one variable
+        for i in 0..21 {
+            dense[[i, i]] = 1;
+        }
+        let check_matrix = SparseBitMatrix::from_dense(dense);
+
+        let partitions = partition_by_time_rounds(&check_matrix, 3, 3);
+
+        assert_eq!(partitions.len(), 3);
+
+        // Partition 0: rounds 0-2 (detectors 0-8)
+        assert_eq!(partitions[0].detector_indices.len(), 9);
+        assert_eq!(partitions[0].detector_indices[0], 0);
+        assert_eq!(partitions[0].detector_indices[8], 8);
+
+        // Partition 1: rounds 3-5 (detectors 9-17)
+        assert_eq!(partitions[1].detector_indices.len(), 9);
+        assert_eq!(partitions[1].detector_indices[0], 9);
+        assert_eq!(partitions[1].detector_indices[8], 17);
+
+        // Partition 2: round 6 only (detectors 18-20) - partial partition
+        assert_eq!(partitions[2].detector_indices.len(), 3);
+        assert_eq!(partitions[2].detector_indices, vec![18, 19, 20]);
+    }
+
+    #[test]
+    fn test_partition_by_time_rounds_realistic_parameters() {
+        // Simulate realistic spacetime code parameters:
+        // - 150 rounds
+        // - 72 detectors per round
+        // - 10 rounds per partition
+        // Total: 10,800 detectors
+        let detectors_per_round = 72;
+        let total_rounds = 150;
+        let rounds_per_partition = 10;
+        let total_detectors = detectors_per_round * total_rounds;
+
+        // Create a sparse check matrix where each detector connects to ~3 variables
+        // (typical for surface codes)
+        use sprs::TriMat;
+        let total_variables = total_detectors * 3 / 2; // Rough estimate
+        let mut tri_mat = TriMat::new((total_detectors, total_variables));
+
+        // Simple pattern: detector i connects to variables i, i+1, i+2
+        for det in 0..total_detectors {
+            for var_offset in 0..3 {
+                let var = (det + var_offset) % total_variables;
+                tri_mat.add_triplet(det, var, 1u8);
+            }
+        }
+        let check_matrix = tri_mat.to_csr() as SparseBitMatrix;
+
+        let partitions = partition_by_time_rounds(&check_matrix, detectors_per_round, rounds_per_partition);
+
+        // Should create 15 partitions (150 rounds / 10 rounds per partition)
+        assert_eq!(partitions.len(), 15);
+
+        // Each partition should have 10 rounds × 72 detectors = 720 detectors
+        for (i, partition) in partitions.iter().enumerate() {
+            assert_eq!(
+                partition.detector_indices.len(),
+                720,
+                "Partition {} has wrong number of detectors",
+                i
+            );
+
+            // Verify detectors are consecutive
+            let expected_start = i * 720;
+            assert_eq!(partition.detector_indices[0], expected_start);
+            assert_eq!(partition.detector_indices[719], expected_start + 719);
+        }
+
+        // Verify no gaps or overlaps in detector coverage
+        let mut all_detectors = std::collections::HashSet::new();
+        for partition in &partitions {
+            for &det in &partition.detector_indices {
+                assert!(
+                    all_detectors.insert(det),
+                    "Detector {} appears in multiple partitions",
+                    det
+                );
+            }
+        }
+        assert_eq!(all_detectors.len(), total_detectors);
+
+        // Verify boundary/volume ratio is small
+        for (i, partition) in partitions.iter().enumerate() {
+            let num_variables = partition.variable_indices.len();
+            let num_detectors = partition.detector_indices.len();
+
+            // With our simple pattern (3 vars per detector), we expect ~720 + boundary overla
+            assert!(
+                num_variables >= 720,
+                "Partition {} has too few variables: {}",
+                i,
+                num_variables
+            );
+            assert!(
+                num_variables < 1500,
+                "Partition {} has too many variables: {}",
+                i,
+                num_variables
+            );
+
+            println!(
+                "Partition {}: {} detectors, {} variables (ratio: {:.2})",
+                i,
+                num_detectors,
+                num_variables,
+                num_variables as f64 / num_detectors as f64
+            );
+        }
+
+        // Calculate boundary size by checking variable overlap between adjacent partitions
+        for i in 0..(partitions.len() - 1) {
+            let vars_i: std::collections::HashSet<usize> =
+                partitions[i].variable_indices.iter().copied().collect();
+            let vars_next: std::collections::HashSet<usize> =
+                partitions[i + 1].variable_indices.iter().copied().collect();
+
+            let boundary_size = vars_i.intersection(&vars_next).count();
+            let partition_volume = vars_i.len();
+
+            let boundary_ratio = boundary_size as f64 / partition_volume as f64;
+
+            println!(
+                "Boundary {}-{}: {} variables shared (ratio: {:.3})",
+                i,
+                i + 1,
+                boundary_size,
+                boundary_ratio
+            );
+
+            // Boundary ratio should be small (< 0.15 for good time partitioning)
+            assert!(
+                boundary_ratio < 0.15,
+                "Boundary ratio {:.3} is too large (should be < 0.15)",
+                boundary_ratio
+            );
+        }
+    }
+
+    #[test]
+    fn test_extract_connected_variables() {
+        // Create a simple check matrix
+        let dense = array![
+            [1, 1, 0, 0, 0],
+            [0, 1, 1, 0, 0],
+            [0, 0, 1, 1, 0],
+            [0, 0, 0, 1, 1],
+        ];
+        let check_matrix = SparseBitMatrix::from_dense(dense);
+
+        // Extract variables connected to detectors 0 and 1
+        let variables = super::extract_connected_variables(&check_matrix, &[0, 1]);
+        assert_eq!(variables, vec![0, 1, 2]);
+
+        // Extract variables connected to detectors 2 and 3
+        let variables = super::extract_connected_variables(&check_matrix, &[2, 3]);
+        assert_eq!(variables, vec![2, 3, 4]);
+
+        // Extract variables connected to all detectors
+        let variables = super::extract_connected_variables(&check_matrix, &[0, 1, 2, 3]);
+        assert_eq!(variables, vec![0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    #[should_panic(expected = "detectors_per_round must be > 0")]
+    fn test_partition_by_time_rounds_zero_detectors_per_round() {
+        let dense = array![[1, 0], [0, 1]];
+        let check_matrix = SparseBitMatrix::from_dense(dense);
+        partition_by_time_rounds(&check_matrix, 0, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "rounds_per_partition must be > 0")]
+    fn test_partition_by_time_rounds_zero_rounds_per_partition() {
+        let dense = array![[1, 0], [0, 1]];
+        let check_matrix = SparseBitMatrix::from_dense(dense);
+        partition_by_time_rounds(&check_matrix, 1, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "not evenly divisible")]
+    fn test_partition_by_time_rounds_uneven_detectors() {
+        // 5 detectors, 2 detectors/round → doesn't divide evenly
+        let dense = array![
+            [1, 0],
+            [0, 1],
+            [1, 0],
+            [0, 1],
+            [1, 0],
+        ];
+        let check_matrix = SparseBitMatrix::from_dense(dense);
+        partition_by_time_rounds(&check_matrix, 2, 1);
+    }
+
+    #[test]
+    fn test_partition_by_time_rounds_single_round_per_partition() {
+        // Edge case: 1 round per partition
+        let dense = array![
+            [1, 1, 0, 0],
+            [0, 1, 1, 0],
+            [0, 0, 1, 1],
+            [1, 0, 0, 1],
+        ];
+        let check_matrix = SparseBitMatrix::from_dense(dense);
+
+        let partitions = partition_by_time_rounds(&check_matrix, 2, 1);
+
+        // Should create 2 partitions (4 detectors / 2 per round = 2 rounds)
+        assert_eq!(partitions.len(), 2);
+
+        // Each partition should have exactly 2 detectors (1 round × 2 detectors/round)
+        assert_eq!(partitions[0].detector_indices, vec![0, 1]);
+        assert_eq!(partitions[1].detector_indices, vec![2, 3]);
+    }
+
+    #[test]
+    fn test_partition_by_time_rounds_all_rounds_in_one_partition() {
+        // Edge case: all rounds in one partition
+        let dense = array![
+            [1, 1, 0, 0],
+            [0, 1, 1, 0],
+            [0, 0, 1, 1],
+            [1, 0, 0, 1],
+        ];
+        let check_matrix = SparseBitMatrix::from_dense(dense);
+
+        let partitions = partition_by_time_rounds(&check_matrix, 2, 10);
+
+        // Should create 1 partition (only 2 rounds, but 10 rounds/partition requested)
+        assert_eq!(partitions.len(), 1);
+
+        // Should include all 4 detectors
+        assert_eq!(partitions[0].detector_indices, vec![0, 1, 2, 3]);
+
+        // Should include all variables (0,1,2,3)
+        assert_eq!(partitions[0].variable_indices, vec![0, 1, 2, 3]);
     }
 
     #[test]
