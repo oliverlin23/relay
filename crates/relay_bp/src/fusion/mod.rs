@@ -10,7 +10,7 @@
 
 use crate::bp::min_sum::MinSumDecoderConfig;
 use crate::bp::relay::{RelayDecoder, RelayDecoderConfig};
-use crate::decoder::{Bit, DecodeResult, Decoder, SparseBitMatrix};
+use crate::decoder::{Bit, BPExtraResult, DecodeResult, Decoder, SparseBitMatrix};
 use ndarray::{Array1, ArrayView1};
 use rayon::prelude::*;
 use std::sync::Arc;
@@ -303,7 +303,68 @@ pub fn combine_posteriors(
     combined
 }
 
-/// Creates a fusion check matrix for combining partition solutions.
+/// Identify boundary detectors that connect to variables in multiple partitions.
+///
+/// A boundary detector is one that connects to variables from different partitions.
+/// These are the only detectors that need to be reconciled during fusion.
+///
+/// # Arguments
+/// * `original_matrix` - Original check matrix
+/// * `partitions` - Vector of partitions
+///
+/// # Returns
+/// Set of detector indices that are on partition boundaries
+fn identify_boundary_detectors(
+    original_matrix: &SparseBitMatrix,
+    partitions: &[Partition],
+) -> std::collections::HashSet<usize> {
+    use std::collections::HashSet;
+    
+    // Build variable-to-partition mapping
+    let mut var_to_partitions: std::collections::HashMap<usize, Vec<usize>> = 
+        std::collections::HashMap::new();
+    
+    for (part_idx, partition) in partitions.iter().enumerate() {
+        for &var_idx in &partition.variable_indices {
+            var_to_partitions.entry(var_idx).or_insert_with(Vec::new).push(part_idx);
+        }
+    }
+    
+    // Find detectors that connect to variables from multiple partitions
+    let mut boundary_detectors = HashSet::new();
+    
+    for det_idx in 0..original_matrix.rows() {
+        let row = original_matrix.outer_view(det_idx).unwrap();
+        let mut partitions_seen = HashSet::new();
+        
+        // Check which partitions this detector's variables belong to
+        for (var_idx, _) in row.iter() {
+            if let Some(partitions_for_var) = var_to_partitions.get(&var_idx) {
+                for &part_idx in partitions_for_var {
+                    partitions_seen.insert(part_idx);
+                }
+            }
+        }
+        
+        // If detector connects to variables from multiple partitions, it's a boundary detector
+        if partitions_seen.len() > 1 {
+            boundary_detectors.insert(det_idx);
+        }
+    }
+    
+    boundary_detectors
+}
+
+/// Fusion matrix creation strategy
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FusionStrategy {
+    /// Use full check matrix - ensures correctness but slower
+    FullMatrix,
+    /// Use only boundary regions - faster but may have correctness issues
+    BoundaryOnly,
+}
+
+/// Creates a fusion check matrix for combining partition solutions (full matrix version).
 ///
 /// Returns the complete original check matrix for fusion decoding.
 /// All constraints (interior + boundary) are included to ensure correctness.
@@ -314,32 +375,152 @@ pub fn combine_posteriors(
 ///
 /// # Arguments
 /// * `original_matrix` - Original check matrix
-/// * `partitions` - Vector of partitions (unused but kept for API compatibility)
+/// * `_partitions` - Vector of partitions (unused but kept for API compatibility)
 ///
 /// # Returns
 /// Tuple of (fusion check matrix, all detector indices)
-pub fn create_fusion_matrix(
+pub fn create_fusion_matrix_full(
     original_matrix: &SparseBitMatrix,
     _partitions: &[Partition],
 ) -> (Arc<SparseBitMatrix>, Vec<usize>) {
-    // Includes ALL detectors in fusion matrix. This is NOT how MWPM did it, but it's the only way
-    // I could get the decoder to get correct results. Basically warm-starts the decoder
-    // Fusion BP with warm-started posteriors will:
-    //   1. Preserve interior solutions
-    //   2. Reconcile conflicting boundary beliefs
+    // Use full matrix to ensure all constraints are satisfied
+    // Warm-started posteriors from leaf decoders help convergence
     let all_detectors: Vec<usize> = (0..original_matrix.rows()).collect();
 
     (Arc::new(original_matrix.clone()), all_detectors)
 }
 
+/// Creates a fusion check matrix containing only boundary detectors and variables.
+///
+/// This optimizes fusion decoding by only processing the boundary regions where
+/// partitions interact, rather than the full problem. Interior solutions from
+/// leaf decoders are preserved, and only boundary inconsistencies are reconciled.
+///
+/// WARNING: This approach may have correctness issues as it doesn't verify
+/// all detector constraints. Use with caution.
+///
+/// # Arguments
+/// * `original_matrix` - Original check matrix
+/// * `partitions` - Vector of partitions
+///
+/// # Returns
+/// Tuple of (fusion check matrix with only boundaries, boundary detector indices)
+pub fn create_fusion_matrix_boundary_only(
+    original_matrix: &SparseBitMatrix,
+    partitions: &[Partition],
+) -> (Arc<SparseBitMatrix>, Vec<usize>) {
+    use std::collections::HashSet;
+    
+    // Identify boundary detectors
+    let boundary_detectors_set = identify_boundary_detectors(original_matrix, partitions);
+    
+    if boundary_detectors_set.is_empty() {
+                    // No boundaries - return empty matrix
+                    // This case occurs when partitions have no overlapping variables
+        use sprs::TriMat;
+        let empty = TriMat::new((0, original_matrix.cols()));
+        return (Arc::new(empty.to_csc() as SparseBitMatrix), Vec::new());
+    }
+    
+    // Identify boundary variables (variables connected to boundary detectors)
+    let mut boundary_vars_set = HashSet::new();
+    for &det_idx in &boundary_detectors_set {
+        let row = original_matrix.outer_view(det_idx).unwrap();
+        for (var_idx, _) in row.iter() {
+            boundary_vars_set.insert(var_idx);
+        }
+    }
+    
+    // Include all detectors that connect to boundary variables
+    // This ensures we check all constraints that might be affected by boundary variable changes
+    let mut all_fusion_detectors = boundary_detectors_set.clone();
+    for det_idx in 0..original_matrix.rows() {
+        if boundary_detectors_set.contains(&det_idx) {
+            continue; // Already included
+        }
+        let row = original_matrix.outer_view(det_idx).unwrap();
+        for (var_idx, _) in row.iter() {
+            if boundary_vars_set.contains(&var_idx) {
+                // This detector connects to a boundary variable, include it
+                all_fusion_detectors.insert(det_idx);
+                break;
+            }
+        }
+    }
+    
+    // Create mapping for fusion detectors and variables
+    let mut fusion_detectors_sorted: Vec<usize> = all_fusion_detectors.iter().copied().collect();
+    fusion_detectors_sorted.sort();
+    
+    let mut boundary_vars_sorted: Vec<usize> = boundary_vars_set.iter().copied().collect();
+    boundary_vars_sorted.sort();
+    
+    let det_map: std::collections::HashMap<usize, usize> = fusion_detectors_sorted
+        .iter()
+        .enumerate()
+        .map(|(new_idx, &orig_idx)| (orig_idx, new_idx))
+        .collect();
+    
+    let var_map: std::collections::HashMap<usize, usize> = boundary_vars_sorted
+        .iter()
+        .enumerate()
+        .map(|(new_idx, &orig_idx)| (orig_idx, new_idx))
+        .collect();
+    
+    // Build boundary-only check matrix
+    use sprs::TriMat;
+    let mut tri_mat = TriMat::new((fusion_detectors_sorted.len(), boundary_vars_sorted.len()));
+    
+    for &det_idx in &fusion_detectors_sorted {
+        let row = original_matrix.outer_view(det_idx).unwrap();
+        let new_det_idx = det_map[&det_idx];
+        
+        for (var_idx, &value) in row.iter() {
+            if let Some(&new_var_idx) = var_map.get(&var_idx) {
+                tri_mat.add_triplet(new_det_idx, new_var_idx, value);
+            }
+        }
+    }
+    
+    let fusion_matrix = Arc::new(tri_mat.to_csc() as SparseBitMatrix);
+    
+    (fusion_matrix, fusion_detectors_sorted)
+}
+
+/// Creates a fusion check matrix based on the specified strategy.
+///
+/// # Arguments
+/// * `original_matrix` - Original check matrix
+/// * `partitions` - Vector of partitions
+/// * `strategy` - Fusion strategy to use
+///
+/// # Returns
+/// Tuple of (fusion check matrix, detector indices)
+pub fn create_fusion_matrix(
+    original_matrix: &SparseBitMatrix,
+    partitions: &[Partition],
+    strategy: FusionStrategy,
+) -> (Arc<SparseBitMatrix>, Vec<usize>) {
+    match strategy {
+        FusionStrategy::FullMatrix => create_fusion_matrix_full(original_matrix, partitions),
+        FusionStrategy::BoundaryOnly => create_fusion_matrix_boundary_only(original_matrix, partitions),
+    }
+}
+
 /// Fusion decoder that combines solutions from multiple partitions.
-/// Doesn't do the hierarchical decoding that MWPM Fusion did, it only does the partitions one time and then
-/// basically runs the regular BP decoder using those posteriors as "warm-starts"
+///
+/// This decoder uses a two-stage approach:
+/// 1. Runs leaf decoders in parallel on partition sub-problems
+/// 2. Combines results using a fusion decoder with warm-started posteriors
+///
+/// The fusion stage reconciles boundary inconsistencies between partitions
+/// while preserving correct interior solutions from the leaf decoders.
 pub struct FusionDecoder<N: PartialEq + Default + Clone + Copy> {
     original_matrix: Arc<SparseBitMatrix>,
     partitions: Vec<Partition>,
     min_sum_config: Arc<MinSumDecoderConfig>,
     relay_config: Arc<RelayDecoderConfig>,
+    fusion_strategy: FusionStrategy,
     _phantom: std::marker::PhantomData<N>,
 }
 
@@ -365,7 +546,7 @@ where
         + std::fmt::Display
         + 'static,
 {
-    /// Create a new fusion decoder.
+    /// Create a new fusion decoder with full matrix strategy (ensures correctness).
     ///
     /// # Arguments
     /// * `check_matrix` - Original check matrix
@@ -378,11 +559,36 @@ where
         min_sum_config: Arc<MinSumDecoderConfig>,
         relay_config: Arc<RelayDecoderConfig>,
     ) -> Self {
+        Self::new_with_strategy(
+            check_matrix,
+            partitions,
+            min_sum_config,
+            relay_config,
+            FusionStrategy::FullMatrix,
+        )
+    }
+
+    /// Create a new fusion decoder with specified strategy.
+    ///
+    /// # Arguments
+    /// * `check_matrix` - Original check matrix
+    /// * `partitions` - Vector of partitions
+    /// * `min_sum_config` - Configuration for MinSum BP decoder
+    /// * `relay_config` - Configuration for Relay decoder
+    /// * `strategy` - Fusion strategy (FullMatrix or BoundaryOnly)
+    pub fn new_with_strategy(
+        check_matrix: Arc<SparseBitMatrix>,
+        partitions: Vec<Partition>,
+        min_sum_config: Arc<MinSumDecoderConfig>,
+        relay_config: Arc<RelayDecoderConfig>,
+        strategy: FusionStrategy,
+    ) -> Self {
         FusionDecoder {
             original_matrix: check_matrix,
             partitions,
             min_sum_config,
             relay_config,
+            fusion_strategy: strategy,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -390,11 +596,11 @@ where
     /// Decode using fusion approach.
     ///
     /// 1. Run leaf decoders in parallel on partition sub-problems
-    /// 2. Extract posteriors from each leaf
+    /// 2. Extract posteriors and decodings from each leaf
     /// 3. Combine posteriors (averaging at boundaries)
-    /// 4. Create fusion matrix with only boundary detectors
-    /// 5. Extract boundary detector observations
-    /// 6. Run fusion decoder to reconcile boundaries
+    /// 4. Create fusion matrix based on selected strategy
+    /// 5. Run fusion decoder with warm-started posteriors
+    /// 6. Validate syndrome satisfaction
     ///
     /// # Arguments
     /// * `detectors` - Detector values for the full problem
@@ -449,25 +655,181 @@ where
             })
             .collect();
 
-        // Step 2: Extract posteriors
+        // Step 2: Extract posteriors and decodings
         let posteriors: Vec<Array1<f64>> = leaf_results.iter().map(|(p, _)| p.clone()).collect();
+        let leaf_decodings: Vec<Array1<u8>> = leaf_results.iter().map(|(_, r)| r.decoding.clone()).collect();
 
         // Step 3: Combine posteriors
         let combined_posteriors =
             combine_posteriors(&posteriors, &self.partitions, self.original_matrix.cols());
 
-        // Step 4: Create fusion decoder with all constraints
-        let (fusion_matrix, _all_detector_indices) =
-            create_fusion_matrix(&self.original_matrix, &self.partitions);
-        let mut fusion_decoder: RelayDecoder<N> = RelayDecoder::new(
-            fusion_matrix,
-            self.min_sum_config.clone(),
-            self.relay_config.clone(),
-        );
+        // Step 4: Create fusion decoder based on strategy
+        let (fusion_matrix, fusion_detector_indices) =
+            create_fusion_matrix(&self.original_matrix, &self.partitions, self.fusion_strategy);
+        
+        let fusion_result = match self.fusion_strategy {
+            FusionStrategy::FullMatrix => {
+                // Full matrix: use all detectors and variables
+                let mut fusion_decoder: RelayDecoder<N> = RelayDecoder::new(
+                    fusion_matrix,
+                    self.min_sum_config.clone(),
+                    self.relay_config.clone(),
+                );
 
-        // Step 5: Load combined posteriors and run fusion decoding
-        fusion_decoder.set_posterior_ratios_f64(combined_posteriors);
-        let fusion_result = fusion_decoder.decode_detailed(detectors);
+                // Step 5: Load combined posteriors and run fusion decoding
+                fusion_decoder.set_posterior_ratios_f64(combined_posteriors);
+                fusion_decoder.decode_detailed(detectors)
+            }
+            FusionStrategy::BoundaryOnly => {
+                // Boundary-only: extract boundary components and run fusion
+                if fusion_detector_indices.is_empty() {
+                    // No boundaries - combine leaf decoder results directly
+                    let mut full_decoding = Array1::<u8>::zeros(self.original_matrix.cols());
+                    let mut full_decoded_detectors = Array1::<Bit>::zeros(self.original_matrix.rows());
+                    
+                    // Combine leaf decoder decodings for all variables
+                    for (leaf_decoding, partition) in leaf_decodings.iter().zip(self.partitions.iter()) {
+                        for (local_idx, &global_idx) in partition.variable_indices.iter().enumerate() {
+                            full_decoding[global_idx] = leaf_decoding[local_idx];
+                        }
+                    }
+                    
+                    // Compute decoded detectors
+                    for (det_idx, detector_row) in self.original_matrix.outer_iterator().enumerate() {
+                        let mut sum = 0u8;
+                        for (var_idx, _) in detector_row.iter() {
+                            sum ^= full_decoding[var_idx];
+                        }
+                        full_decoded_detectors[det_idx] = sum;
+                    }
+                    
+                    // Check syndrome satisfaction
+                    let syndrome_satisfied = full_decoded_detectors
+                        .iter()
+                        .zip(detectors.iter())
+                        .all(|(computed, original)| computed == original);
+                    
+                    return DecodeResult {
+                        decoding: full_decoding,
+                        decoded_detectors: full_decoded_detectors,
+                        posterior_ratios: combined_posteriors,
+                        success: syndrome_satisfied,
+                        decoding_quality: 0.0,
+                        iterations: 0,
+                        max_iter: 0,
+                        extra: BPExtraResult::None,
+                    };
+                }
+                
+                // Extract boundary variables (variables in the fusion matrix)
+                let boundary_vars: std::collections::HashSet<usize> = {
+                    let mut vars = std::collections::HashSet::new();
+                    for &det_idx in &fusion_detector_indices {
+                        let row = self.original_matrix.outer_view(det_idx).unwrap();
+                        for (var_idx, _) in row.iter() {
+                            vars.insert(var_idx);
+                        }
+                    }
+                    vars
+                };
+                
+                let mut boundary_vars_sorted: Vec<usize> = boundary_vars.iter().copied().collect();
+                boundary_vars_sorted.sort();
+                
+                // Create boundary-only posterior array
+                let boundary_posteriors: Array1<f64> = boundary_vars_sorted
+                    .iter()
+                    .map(|&var_idx| combined_posteriors[var_idx])
+                    .collect();
+                
+                // Extract boundary detector values
+                let boundary_detector_values: Array1<Bit> = fusion_detector_indices
+                    .iter()
+                    .map(|&det_idx| detectors[det_idx])
+                    .collect();
+                
+                // Extract boundary variable priors
+                let boundary_priors: Array1<f64> = boundary_vars_sorted
+                    .iter()
+                    .map(|&var_idx| self.min_sum_config.error_priors[var_idx])
+                    .collect();
+                
+                // Create boundary-only config
+                let boundary_config = Arc::new(MinSumDecoderConfig {
+                    error_priors: boundary_priors,
+                    ..(*self.min_sum_config).clone()
+                });
+                
+                let mut fusion_decoder: RelayDecoder<N> = RelayDecoder::new(
+                    fusion_matrix,
+                    boundary_config,
+                    self.relay_config.clone(),
+                );
+
+                // Step 5: Load boundary posteriors and run fusion decoding on boundaries only
+                fusion_decoder.set_posterior_ratios_f64(boundary_posteriors);
+                let boundary_fusion_result = fusion_decoder.decode_detailed(boundary_detector_values.view());
+                
+                // Step 6: Map boundary results back to full variable space
+                let mut full_decoding = Array1::<u8>::zeros(self.original_matrix.cols());
+                
+                // Initialize with leaf decoder decodings for interior variables
+                // This preserves correct interior solutions from partition decoders
+                for (leaf_decoding, partition) in leaf_decodings.iter().zip(self.partitions.iter()) {
+                    for (local_idx, &global_idx) in partition.variable_indices.iter().enumerate() {
+                        // Set interior variables from leaf decoder results
+                        // Boundary variables will be set by fusion decoder below
+                        if !boundary_vars.contains(&global_idx) {
+                            full_decoding[global_idx] = leaf_decoding[local_idx];
+                        }
+                    }
+                }
+                
+                // Override with boundary fusion results for boundary variables
+                let var_map: std::collections::HashMap<usize, usize> = boundary_vars_sorted
+                    .iter()
+                    .enumerate()
+                    .map(|(new_idx, &orig_idx)| (orig_idx, new_idx))
+                    .collect();
+                
+                for &var_idx in &boundary_vars_sorted {
+                    if let Some(&boundary_idx) = var_map.get(&var_idx) {
+                        full_decoding[var_idx] = boundary_fusion_result.decoding[boundary_idx];
+                    }
+                }
+                
+                // Compute decoded detectors for full problem
+                let mut full_decoded_detectors = Array1::<Bit>::zeros(self.original_matrix.rows());
+                for (det_idx, detector_row) in self.original_matrix.outer_iterator().enumerate() {
+                    let mut sum = 0u8;
+                    for (var_idx, _) in detector_row.iter() {
+                        sum ^= full_decoding[var_idx];
+                    }
+                    full_decoded_detectors[det_idx] = sum;
+                }
+                
+                // Create full result with boundary fusion decoding
+                DecodeResult {
+                    decoding: full_decoding,
+                    decoded_detectors: full_decoded_detectors,
+                    posterior_ratios: {
+                        let mut full_posteriors = combined_posteriors.clone();
+                        // Update boundary posteriors with fusion results
+                        for &var_idx in &boundary_vars_sorted {
+                            if let Some(&boundary_idx) = var_map.get(&var_idx) {
+                                full_posteriors[var_idx] = boundary_fusion_result.posterior_ratios[boundary_idx];
+                            }
+                        }
+                        full_posteriors
+                    },
+                    success: boundary_fusion_result.success,
+                    decoding_quality: boundary_fusion_result.decoding_quality,
+                    iterations: boundary_fusion_result.iterations,
+                    max_iter: boundary_fusion_result.max_iter,
+                    extra: boundary_fusion_result.extra,
+                }
+            }
+        };
 
         // Step 6: Validate that fusion result satisfies the full original syndrome
         let mut computed_syndrome = vec![0u8; self.original_matrix.rows()];
@@ -557,7 +919,7 @@ mod tests {
         // Should include variables connected to detectors 4-7: vars 4,5,6,7,8
         assert_eq!(partitions[1].variable_indices, vec![4, 5, 6, 7, 8]);
 
-        // Note: Variable 4 appears in both partitions, it is boundary variable
+        // Variable 4 appears in both partitions, making it a boundary variable
     }
 
     #[test]
@@ -903,10 +1265,9 @@ mod tests {
         ];
 
         let (fusion_matrix, all_detectors) =
-            create_fusion_matrix(&check_matrix, &partitions);
+            create_fusion_matrix(&check_matrix, &partitions, FusionStrategy::FullMatrix);
 
-        // Should include ALL detectors (not just boundary)
-        // This ensures fusion respects all constraints
+        // Full matrix strategy includes all detectors to ensure all constraints are satisfied
         assert_eq!(all_detectors.len(), 4);
         assert_eq!(all_detectors, vec![0, 1, 2, 3]);
 

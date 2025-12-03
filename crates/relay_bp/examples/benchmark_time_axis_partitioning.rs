@@ -2,7 +2,6 @@
 //
 // This code is licensed under the Apache License, Version 2.0. You may
 // obtain a copy of this license in the LICENSE.txt file in the root directory
-// of this source tree or at http://www.apache.org/licenses/LICENSE.txt file in the root directory
 // of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
 //
 // Any modifications or derivative works of this code must retain this
@@ -33,7 +32,6 @@ use std::collections::HashSet;
 use std::io::Write;
 use std::sync::Arc;
 use std::time::Instant;
-use std::time::Instant;
 use ndarray::Array1;
 
 /// Statistics about partition boundary quality
@@ -62,7 +60,6 @@ struct DecodingMetrics {
     syndrome_satisfaction_count: usize,
     decodings: Vec<Array1<u8>>,
     total_time_secs: f64,
-    total_time_secs: f64,
 }
 
 fn main() {
@@ -87,7 +84,6 @@ fn main() {
             .expect("Failed to load test detectors");
 
     println!("  Code: [[72, 12, 6]] bivariate bicycle (6-round data)");
-    println!("  Code: [[72, 12, 6]] bivariate bicycle (6-round data)");
     println!("  Check matrix: {} detectors × {} error variables",
         code.detector_error_matrix.rows(),
         code.detector_error_matrix.cols()
@@ -105,7 +101,7 @@ fn main() {
     println!("    Total detectors: {} ({}×{})", total_detectors, total_rounds, detectors_per_round);
 
     let check_matrix = Arc::new(code.detector_error_matrix.to_csr());
-    let num_test_samples = test_detectors.nrows().min(20); // Use up to 20 samples
+    let num_test_samples = test_detectors.nrows().min(5); // Use up to 5 samples
 
     // Configuration for decoders
     let bp_config = Arc::new(MinSumDecoderConfig {
@@ -149,9 +145,6 @@ fn main() {
             &check_matrix,
             format!("Time-axis ({} rounds/partition)", rounds_per_partition),
         );
-        let elapsed = start.elapsed();
-        
-        println!("done ({:.2}s)", elapsed.as_secs_f64());
         partition_analyses.push(analysis);
     }
 
@@ -165,9 +158,6 @@ fn main() {
             &check_matrix,
             format!("Count-based ({} partitions)", num_partitions),
         );
-        let elapsed = start.elapsed();
-        
-        println!("done ({:.2}s)", elapsed.as_secs_f64());
         partition_analyses.push(analysis);
     }
 
@@ -298,37 +288,29 @@ fn main() {
     println!("{:-<100}", "");
     println!("{:<30} | {:>15} | {:>15} | {:>15} | {:>15}",
         "Decoder", "Success Rate", "Syndrome Sat.", "Avg Iterations", "Avg Time (ms)");
-    println!("{:<30} | {:>15} | {:>15} | {:>15} | {:>15}",
-        "Decoder", "Success Rate", "Syndrome Sat.", "Avg Iterations", "Avg Time (ms)");
     println!("{:-<100}", "");
 
-    println!("{:<30} | {:>6}/{:<7} | {:>6}/{:<7} | {:>15.1} | {:>14.2}",
     println!("{:<30} | {:>6}/{:<7} | {:>6}/{:<7} | {:>15.1} | {:>14.2}",
         "Baseline",
         baseline_metrics.success_count, num_test_samples,
         baseline_metrics.syndrome_satisfaction_count, num_test_samples,
         baseline_metrics.total_iterations as f64 / num_test_samples as f64,
         baseline_metrics.total_time_secs * 1000.0 / num_test_samples as f64,
-        baseline_metrics.total_time_secs * 1000.0 / num_test_samples as f64,
     );
 
-    println!("{:<30} | {:>6}/{:<7} | {:>6}/{:<7} | {:>15.1} | {:>14.2}",
     println!("{:<30} | {:>6}/{:<7} | {:>6}/{:<7} | {:>15.1} | {:>14.2}",
         "Time-axis fusion",
         time_axis_metrics.success_count, num_test_samples,
         time_axis_metrics.syndrome_satisfaction_count, num_test_samples,
         time_axis_metrics.total_iterations as f64 / num_test_samples as f64,
         time_axis_metrics.total_time_secs * 1000.0 / num_test_samples as f64,
-        time_axis_metrics.total_time_secs * 1000.0 / num_test_samples as f64,
     );
 
-    println!("{:<30} | {:>6}/{:<7} | {:>6}/{:<7} | {:>15.1} | {:>14.2}",
     println!("{:<30} | {:>6}/{:<7} | {:>6}/{:<7} | {:>15.1} | {:>14.2}",
         "Count-based fusion",
         count_based_metrics.success_count, num_test_samples,
         count_based_metrics.syndrome_satisfaction_count, num_test_samples,
         count_based_metrics.total_iterations as f64 / num_test_samples as f64,
-        count_based_metrics.total_time_secs * 1000.0 / num_test_samples as f64,
         count_based_metrics.total_time_secs * 1000.0 / num_test_samples as f64,
     );
     println!("{:-<100}", "");
@@ -394,19 +376,13 @@ fn main() {
 
     let validation_rounds_per_partition = 2;
     println!("\nValidating time-axis partitioning with {} rounds/partition:", validation_rounds_per_partition);
-    let validation_rounds_per_partition = 2;
-    println!("\nValidating time-axis partitioning with {} rounds/partition:", validation_rounds_per_partition);
 
     let partitions_validation = partition_by_time_rounds(&check_matrix, detectors_per_round, validation_rounds_per_partition);
-    let partitions_validation = partition_by_time_rounds(&check_matrix, detectors_per_round, validation_rounds_per_partition);
 
-    println!("  Expected partitions: {}", total_rounds / validation_rounds_per_partition);
-    println!("  Actual partitions: {}", partitions_validation.len());
-    println!("  Expected partitions: {}", total_rounds / validation_rounds_per_partition);
+    println!("  Expected partitions: {}", (total_rounds + validation_rounds_per_partition - 1) / validation_rounds_per_partition);
     println!("  Actual partitions: {}", partitions_validation.len());
 
-    if partitions_validation.len() == total_rounds / validation_rounds_per_partition {
-    if partitions_validation.len() == total_rounds / validation_rounds_per_partition {
+    if partitions_validation.len() == (total_rounds + validation_rounds_per_partition - 1) / validation_rounds_per_partition {
         println!("  [PASS] Correct number of partitions");
     } else {
         println!("  [FAIL] Unexpected number of partitions!");
@@ -422,7 +398,6 @@ fn main() {
         println!("    Detectors: {} (expected: {})",
             partition.detector_indices.len(),
             validation_rounds_per_partition * detectors_per_round
-            validation_rounds_per_partition * detectors_per_round
         );
         println!("    Variables: {}", partition.variable_indices.len());
 
@@ -430,8 +405,6 @@ fn main() {
         if !partition.detector_indices.is_empty() {
             let min_det = *partition.detector_indices.iter().min().unwrap();
             let max_det = *partition.detector_indices.iter().max().unwrap();
-            let expected_min = i * validation_rounds_per_partition * detectors_per_round;
-            let expected_max = expected_min + validation_rounds_per_partition * detectors_per_round - 1;
             let expected_min = i * validation_rounds_per_partition * detectors_per_round;
             let expected_max = expected_min + validation_rounds_per_partition * detectors_per_round - 1;
 
@@ -471,9 +444,6 @@ fn main() {
         for &var in &partition.variable_indices {
             all_variables_seen.insert(var);
         }
-        
-        let partition_elapsed = partition_start.elapsed();
-        println!("    Completed in {:.2}s", partition_elapsed.as_secs_f64());
     }
     
     println!("\n  Boundary Variable Summary:");
@@ -676,19 +646,26 @@ fn count_boundary_variables(
         .copied()
         .collect();
 
+    let var_set: HashSet<usize> = this_partition
+        .variable_indices
+        .iter()
+        .copied()
+        .collect();
+
     let mut boundary_vars = HashSet::new();
 
-    // For each variable in this partition, check if it connects to external detectors
-    for &var_idx in &this_partition.variable_indices {
-        // Find which detectors use this variable
-        for det_idx in 0..check_matrix.rows() {
-            let row = check_matrix.outer_view(det_idx).unwrap();
-            let connects_to_var = row.iter().any(|(col, _)| col == var_idx);
+    // Iterate through detectors ONCE, building boundary set efficiently
+    // For each detector NOT in this partition, mark all its variables (if in partition) as boundary
+    for det_idx in 0..check_matrix.rows() {
+        if det_set.contains(&det_idx) {
+            continue; // Skip detectors in this partition
+        }
 
-            if connects_to_var && !det_set.contains(&det_idx) {
-                // This variable connects to a detector outside the partition
+        let row = check_matrix.outer_view(det_idx).unwrap();
+        for (var_idx, _) in row.iter() {
+            if var_set.contains(&var_idx) {
+                // This variable is in the partition but connects to external detector
                 boundary_vars.insert(var_idx);
-                break;
             }
         }
     }
@@ -709,19 +686,26 @@ fn extract_boundary_variables(
         .copied()
         .collect();
 
+    let var_set: HashSet<usize> = this_partition
+        .variable_indices
+        .iter()
+        .copied()
+        .collect();
+
     let mut boundary_vars = HashSet::new();
 
-    // For each variable in this partition, check if it connects to external detectors
-    for &var_idx in &this_partition.variable_indices {
-        // Find which detectors use this variable
-        for det_idx in 0..check_matrix.rows() {
-            let row = check_matrix.outer_view(det_idx).unwrap();
-            let connects_to_var = row.iter().any(|(col, _)| col == var_idx);
+    // Iterate through detectors ONCE, building boundary set efficiently
+    // For each detector NOT in this partition, mark all its variables (if in partition) as boundary
+    for det_idx in 0..check_matrix.rows() {
+        if det_set.contains(&det_idx) {
+            continue; // Skip detectors in this partition
+        }
 
-            if connects_to_var && !det_set.contains(&det_idx) {
-                // This variable connects to a detector outside the partition
+        let row = check_matrix.outer_view(det_idx).unwrap();
+        for (var_idx, _) in row.iter() {
+            if var_set.contains(&var_idx) {
+                // This variable is in the partition but connects to external detector
                 boundary_vars.insert(var_idx);
-                break;
             }
         }
     }
@@ -872,7 +856,6 @@ fn run_baseline_decoder(
         syndrome_satisfaction_count,
         decodings,
         total_time_secs: total_time.as_secs_f64(),
-        total_time_secs: total_time.as_secs_f64(),
     }
 }
 
@@ -897,7 +880,6 @@ fn run_fusion_decoder(
     let mut syndrome_satisfaction_count = 0;
     let mut decodings = Vec::new();
 
-    let start = Instant::now();
     let start = Instant::now();
     for i in 0..num_samples {
         if i > 0 && i % 5 == 0 {
@@ -928,7 +910,6 @@ fn run_fusion_decoder(
         total_iterations,
         syndrome_satisfaction_count,
         decodings,
-        total_time_secs: total_time.as_secs_f64(),
         total_time_secs: total_time.as_secs_f64(),
     }
 }
