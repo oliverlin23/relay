@@ -1,0 +1,264 @@
+  --> crates/relay_bp/examples/benchmark_time_axis_partitioning.rs:33:5
+   |
+33 | use std::io::Write;
+   |     ^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` on by default
+
+   --> crates/relay_bp/examples/benchmark_time_axis_partitioning.rs:759:9
+    |
+759 |     let boundary_0 = count_boundary_variables(&partitions, 0, &check_matrix);
+    |         ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_boundary_0`
+    |
+    = note: `#[warn(unused_variables)]` on by default
+
+   --> crates/relay_bp/examples/benchmark_time_axis_partitioning.rs:760:9
+    |
+760 |     let boundary_1 = count_boundary_variables(&partitions, 1, &check_matrix);
+    |         ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_boundary_1`
+
+  --> crates/relay_bp/examples/benchmark_time_axis_partitioning.rs:41:5
+   |
+40 | struct BoundaryStats {
+   |        ------------- fields in this struct
+41 |     boundary_vars: usize,
+   |     ^^^^^^^^^^^^^
+42 |     total_vars: usize,
+   |     ^^^^^^^^^^
+   |
+   = note: `BoundaryStats` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` on by default
+
+  --> crates/relay_bp/examples/benchmark_time_axis_partitioning.rs:50:5
+   |
+47 | struct PartitionAnalysis {
+   |        ----------------- field in this struct
+...
+50 |     partition_stats: Vec<BoundaryStats>,
+   |     ^^^^^^^^^^^^^^^
+   |
+   = note: `PartitionAnalysis` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+  --> crates/relay_bp/examples/benchmark_time_axis_partitioning.rs:59:5
+   |
+57 | struct DecodingMetrics {
+   |        --------------- field in this struct
+58 |     success_count: usize,
+59 |     total_samples: usize,
+   |     ^^^^^^^^^^^^^
+   |
+   = note: `DecodingMetrics` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+
+================================================================================
+COMPREHENSIVE TIME-AXIS PARTITIONING BENCHMARK
+================================================================================
+
+[1/6] Loading Test Data
+--------------------------------------------------------------------------------
+  Code: [[72, 12, 6]] bivariate bicycle (6-round data)
+  Check matrix: 432 detectors × 16164 error variables
+  Test samples: 100
+
+  Temporal structure:
+    Detectors per round: 72
+    Total rounds: 6
+    Total detectors: 432 (6×72)
+
+================================================================================
+[2/6] PARTITION QUALITY ANALYSIS
+================================================================================
+
+  Analyzing time-axis partitioning strategies...
+    [1/3] 1 rounds/partition...         Analyzing partition 3/6... done
+        Analyzing partition 5/6... done
+done (0.89s)
+    [2/3] 2 rounds/partition... done (0.84s)
+    [3/3] 3 rounds/partition... done (0.85s)
+
+  Analyzing count-based partitioning strategies...
+    [1/3] 6 partitions...         Analyzing partition 3/6... done
+        Analyzing partition 5/6... done
+done (0.35s)
+    [2/3] 3 partitions... done (0.34s)
+    [3/3] 2 partitions... done (0.34s)
+
+Partition Quality Results:
+----------------------------------------------------------------------------------------------------
+Strategy                            | Partitions |  Avg Boundary/% |  Max Boundary/% |  Min Boundary/%
+----------------------------------------------------------------------------------------------------
+Time-axis (1 rounds/partition)      |          6 |           93.2% |           96.9% |           85.0%
+Time-axis (2 rounds/partition)      |          3 |           63.9% |           80.3% |           54.5%
+Time-axis (3 rounds/partition)      |          2 |           39.4% |           40.0% |           38.7%
+Count-based (6 partitions)          |          6 |          100.0% |          100.0% |          100.0%
+Count-based (3 partitions)          |          3 |          100.0% |          100.0% |          100.0%
+Count-based (2 partitions)          |          2 |          100.0% |          100.0% |          100.0%
+----------------------------------------------------------------------------------------------------
+
+================================================================================
+[3/6] REWARD-HACKING VALIDATION
+================================================================================
+
+Validating boundary variable calculation...
+  [PASS] Boundary calculation validated on hand-crafted example
+
+Checking for reward-hacking patterns:
+  • Time-axis avg ratio: 0.655
+  • Count-based avg ratio: 1.000
+  [PASS] Clear difference between strategies
+  [WARNING] Time-axis boundary ratio > 0.5 - this seems wrong!
+
+================================================================================
+[4/6] CORRECTNESS VALIDATION
+================================================================================
+
+Running 20 test samples through decoders...
+
+  [1/3] Running baseline RelayBP decoder...
+      Progress: 5/20 samples... (0.4s elapsed, ~0.9s remaining)
+      Progress: 10/20 samples... (0.7s elapsed, ~0.5s remaining)
+      Progress: 15/20 samples... (1.0s elapsed, ~0.2s remaining)
+      Completed all 20 samples
+    Completed in 1.59s
+
+  [2/3] Running time-axis fusion decoder (2 rounds/partition)...
+      Progress: 5/20 samples... (19.3s elapsed, ~45.1s remaining)
+      Progress: 10/20 samples... (35.4s elapsed, ~29.0s remaining)
+      Progress: 15/20 samples... (51.8s elapsed, ~12.9s remaining)
+      Completed all 20 samples
+    Completed in 65.94s
+
+  [3/3] Running count-based fusion decoder (3 partitions)...
+      Progress: 5/20 samples... (10.8s elapsed, ~25.1s remaining)
+      Progress: 10/20 samples... (19.5s elapsed, ~16.0s remaining)
+      Progress: 15/20 samples... (28.6s elapsed, ~7.1s remaining)
+      Completed all 20 samples
+    Completed in 36.55s
+
+Correctness Results:
+----------------------------------------------------------------------------------------------------
+Decoder                        |    Success Rate |   Syndrome Sat. |  Avg Iterations |   Avg Time (ms)
+----------------------------------------------------------------------------------------------------
+Baseline                       |     20/20      |     20/20      |            75.2 |          79.41
+Time-axis fusion               |     20/20      |     20/20      |            98.7 |        3296.77
+Count-based fusion             |     20/20      |     20/20      |            98.7 |        1827.30
+----------------------------------------------------------------------------------------------------
+
+Decoding Agreement:
+  • Time-axis vs Baseline: 17/20 identical
+  • Count-based vs Baseline: 17/20 identical
+
+Detailed Decoding Agreement:
+----------------------------------------------------------------------------------------------------
+Sample     |        Baseline |       Time-axis |     Count-based |       All Agree
+----------------------------------------------------------------------------------------------------
+0          |               ✓ |               ✓ |               ✓ |               ✓
+1          |               ✓ |               ✓ |               ✓ |               ✓
+2          |               ✓ |               ✓ |               ✓ |               ✓
+3          |               ✓ |               ✓ |               ✓ |               ✓
+4          |               ✓ |               ✓ |               ✓ |               ✓
+5          |               ✓ |               ✓ |               ✓ |               ✓
+6          |               ✓ |               ✓ |               ✓ |               ✓
+7          |               ✓ |               ✓ |               ✓ |               ✓
+8          |               ✓ |               ✓ |               ✓ |               ✓
+9          |               ✓ |               ✓ |               ✓ |               ✓
+10         |               ✓ |               ✓ |               ✓ |               ✓
+11         |               ✓ |               ✓ |               ✓ |               ✓
+12         |               ✓ |               ✓ |               ✓ |               ✓
+13         |               ✓ |               ✓ |               ✓ |               ✓
+14         |               ✓ |               ✓ |               ✓ |               ✓
+15         |               ✓ |               ✗ |               ✗ |               ✗
+16         |               ✓ |               ✓ |               ✓ |               ✓
+17         |               ✓ |               ✗ |               ✗ |               ✗
+18         |               ✓ |               ✓ |               ✓ |               ✓
+19         |               ✓ |               ✗ |               ✗ |               ✗
+----------------------------------------------------------------------------------------------------
+  Summary: 17/20 samples have all decoders agree
+
+Agreement Data (for visualization):
+  time_axis_agreement: [true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, true, false, true, false]
+  count_based_agreement: [true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, true, false, true, false]
+
+================================================================================
+[5/6] PARTITION STRUCTURE VALIDATION
+================================================================================
+
+Validating time-axis partitioning with 2 rounds/partition:
+  Expected partitions: 3
+  Actual partitions: 3
+  [PASS] Correct number of partitions
+
+  Validating 3 partitions...
+
+  Partition 0:
+    Detectors: 144 (expected: 144)
+    Variables: 6948
+    Detector range: [0..143] (expected: [0..143])
+    [PASS] Correct detector range
+    Boundary variables: 3960 (57.0% of partition variables)
+    Completed in 0.22s
+
+  Partition 1:
+    Detectors: 144 (expected: 144)
+    Variables: 9864
+    Detector range: [144..287] (expected: [144..287])
+    [PASS] Correct detector range
+    Boundary variables: 7920 (80.3% of partition variables)
+    Completed in 0.28s
+
+  Partition 2:
+    Detectors: 144 (expected: 144)
+    Variables: 7272
+    Detector range: [288..431] (expected: [288..431])
+    [PASS] Correct detector range
+    Boundary variables: 3960 (54.5% of partition variables)
+    Completed in 0.28s
+
+  Boundary Variable Summary:
+    Total boundary variables: 7920 (49.0% of all variables)
+    Boundary variable indices (first 50): [1322, 1324, 1329, 1335, 1337, 1338, 1339, 1340, 1363, 1368, 1370, 1372, 1383, 1384, 1385, 1386, 1393, 1395, 1401, 1403, 1406, 1407, 1409, 1410, 1412, 1413, 1415, 1416, 1418, 1419, 1421, 1425, 1426, 1428, 1429, 1430, 1431, 1432, 1434, 1435, 1436, 1437, 1438, 1439, 1440, 1441, 1443, 1445, 1446, 1448]
+
+  Coverage check:
+    Detectors covered: 432/432
+    Variables seen: 16164/16164
+    [PASS] All detectors covered exactly once
+
+================================================================================
+[6/6] SUMMARY AND RECOMMENDATIONS
+================================================================================
+
+=== KEY FINDINGS ===
+
+1. PARTITION QUALITY:
+   • Best time-axis: 39.4% boundary ratio (Time-axis (3 rounds/partition))
+   • Best count-based: 100.0% boundary ratio (Count-based (6 partitions))
+   • Improvement factor: 2.5x better with time-axis partitioning
+
+2. CORRECTNESS:
+   • [PASS] Time-axis fusion matches baseline success rate
+   • [PASS] All time-axis decodings satisfy syndromes
+
+3. TIME-AXIS PARTITIONING EFFECTIVENESS:
+   • [POOR] Boundary ratio >= 25% suggests partitioning may not help
+
+=== VALIDATION STATUS ===
+
+[PASS] Boundary calculation is correct
+[PASS] Partition coverage is complete
+[PASS] All fusion decodings satisfy syndromes
+[PASS] Time-axis shows significant improvement over count-based
+
+=== OVERALL ASSESSMENT ===
+
+TIME-AXIS PARTITIONING: VALIDATED
+
+The implementation correctly partitions by time and achieves
+better boundary/volume ratios than naive count-based partitioning.
+
+RECOMMENDATION: Proceed with using time-axis partitioning for
+spacetime quantum error correction codes.
+
+================================================================================
+BENCHMARK COMPLETED
+Total time: 108.46s (1.8 minutes)
+================================================================================

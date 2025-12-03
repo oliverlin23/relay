@@ -1,0 +1,64 @@
+================================================================================
+TIME-AXIS PARTITIONING VISUALIZATION REPORT
+================================================================================
+
+PARTITION QUALITY ANALYSIS
+--------------------------------------------------------------------------------
+
+Strategy: Time-axis (1 rounds/partition)
+  Partitions: 6
+  Avg Boundary Ratio: 93.20%
+  Min Boundary Ratio: 85.00%
+  Max Boundary Ratio: 96.90%
+
+Strategy: Time-axis (2 rounds/partition)
+  Partitions: 3
+  Avg Boundary Ratio: 63.90%
+  Min Boundary Ratio: 54.50%
+  Max Boundary Ratio: 80.30%
+
+Strategy: Time-axis (3 rounds/partition)
+  Partitions: 2
+  Avg Boundary Ratio: 39.40%
+  Min Boundary Ratio: 38.70%
+  Max Boundary Ratio: 40.00%
+
+Strategy: Count-based (6 partitions)
+  Partitions: 6
+  Avg Boundary Ratio: 100.00%
+  Min Boundary Ratio: 100.00%
+  Max Boundary Ratio: 100.00%
+
+Strategy: Count-based (3 partitions)
+  Partitions: 3
+  Avg Boundary Ratio: 100.00%
+  Min Boundary Ratio: 100.00%
+  Max Boundary Ratio: 100.00%
+
+Strategy: Count-based (2 partitions)
+  Partitions: 2
+  Avg Boundary Ratio: 100.00%
+  Min Boundary Ratio: 100.00%
+  Max Boundary Ratio: 100.00%
+
+
+DECODING PERFORMANCE
+--------------------------------------------------------------------------------
+
+Baseline:
+  Success Rate: 20/20 (100.0%)
+  Syndrome Satisfaction: 20/20 (100.0%)
+  Avg Iterations: 75.2
+  Avg Time: 79.41 ms
+
+Time-axis Fusion:
+  Success Rate: 20/20 (100.0%)
+  Syndrome Satisfaction: 20/20 (100.0%)
+  Avg Iterations: 98.7
+  Avg Time: 3296.77 ms
+
+Count-based Fusion:
+  Success Rate: 20/20 (100.0%)
+  Syndrome Satisfaction: 20/20 (100.0%)
+  Avg Iterations: 98.7
+  Avg Time: 1827.30 ms

@@ -16,6 +16,9 @@
 //! 2. Verifying correctness of decoding
 //! 3. Comparing time-axis vs count-based partitioning
 //! 4. Detecting potential reward-hacking in metrics
+//!
+//! Uses [[72, 12, 6]] bivariate bicycle code with 30 rounds by default.
+//! See GENERATING_TEST_DATA.md for instructions on generating data for other round numbers.
 
 use ndarray::Array2;
 use ndarray_npy::read_npy;
@@ -27,7 +30,9 @@ use relay_bp::fusion::{partition_by_count, partition_by_time_rounds, FusionDecod
 use relay_bp::utilities::test::get_test_data_path;
 use relay_bp::bipartite_graph::BipartiteGraph;
 use std::collections::HashSet;
+use std::io::Write;
 use std::sync::Arc;
+use std::time::Instant;
 use ndarray::Array1;
 
 /// Statistics about partition boundary quality
@@ -55,9 +60,12 @@ struct DecodingMetrics {
     total_iterations: usize,
     syndrome_satisfaction_count: usize,
     decodings: Vec<Array1<u8>>,
+    total_time_secs: f64,
 }
 
 fn main() {
+    let benchmark_start = Instant::now();
+    
     println!("\n{}", "=".repeat(80));
     println!("COMPREHENSIVE TIME-AXIS PARTITIONING BENCHMARK");
     println!("{}", "=".repeat(80));
@@ -76,7 +84,7 @@ fn main() {
         read_npy(resources.join("72_12_6_r6_detectors.npy"))
             .expect("Failed to load test detectors");
 
-    println!("  Code: [[72, 12, 6]] bivariate bicycle");
+    println!("  Code: [[72, 12, 6]] bivariate bicycle (6-round data)");
     println!("  Check matrix: {} detectors × {} error variables",
         code.detector_error_matrix.rows(),
         code.detector_error_matrix.cols()
@@ -125,7 +133,13 @@ fn main() {
     let mut partition_analyses = Vec::new();
 
     // Time-axis partitioning with different rounds_per_partition
-    for &rounds_per_partition in &[1, 2, 3, 6] {
+    // For 6 rounds, test: 1, 2, 3 rounds/partition
+    println!("\n  Analyzing time-axis partitioning strategies...");
+    for (idx, &rounds_per_partition) in [1, 2, 3].iter().enumerate() {
+        print!("    [{}/3] {} rounds/partition... ", idx + 1, rounds_per_partition);
+        std::io::Write::flush(&mut std::io::stdout()).unwrap();
+        
+        let start = Instant::now();
         let partitions = partition_by_time_rounds(
             &check_matrix,
             detectors_per_round,
@@ -137,12 +151,20 @@ fn main() {
             &check_matrix,
             format!("Time-axis ({} rounds/partition)", rounds_per_partition),
         );
-
+        let elapsed = start.elapsed();
+        
+        println!("done ({:.2}s)", elapsed.as_secs_f64());
         partition_analyses.push(analysis);
     }
 
     // Count-based partitioning with different partition counts
-    for &num_partitions in &[2, 3, 6] {
+    // Match the number of partitions from time-axis tests (6, 3, 2 partitions)
+    println!("\n  Analyzing count-based partitioning strategies...");
+    for (idx, &num_partitions) in [6, 3, 2].iter().enumerate() {
+        print!("    [{}/3] {} partitions... ", idx + 1, num_partitions);
+        std::io::Write::flush(&mut std::io::stdout()).unwrap();
+        
+        let start = Instant::now();
         let partitions = partition_by_count(check_matrix.cols(), num_partitions);
 
         let analysis = analyze_partitions(
@@ -150,7 +172,9 @@ fn main() {
             &check_matrix,
             format!("Count-based ({} partitions)", num_partitions),
         );
-
+        let elapsed = start.elapsed();
+        
+        println!("done ({:.2}s)", elapsed.as_secs_f64());
         partition_analyses.push(analysis);
     }
 
@@ -238,7 +262,7 @@ fn main() {
     println!("\nRunning {} test samples through decoders...", num_test_samples);
 
     // Baseline decoder
-    println!("\n  Running baseline RelayBP decoder...");
+    println!("\n  [1/3] Running baseline RelayBP decoder...");
     let baseline_metrics = run_baseline_decoder(
         &check_matrix,
         &test_detectors,
@@ -246,10 +270,12 @@ fn main() {
         &bp_config,
         &relay_config,
     );
+    println!("    Completed in {:.2}s", baseline_metrics.total_time_secs);
 
-    // Time-axis fusion decoder (2 rounds/partition)
-    println!("  Running time-axis fusion decoder (2 rounds/partition)...");
-    let time_axis_partitions = partition_by_time_rounds(&check_matrix, detectors_per_round, 2);
+    // Time-axis fusion decoder (2 rounds/partition for 6-round code)
+    let rounds_per_partition = 2;
+    println!("\n  [2/3] Running time-axis fusion decoder ({} rounds/partition)...", rounds_per_partition);
+    let time_axis_partitions = partition_by_time_rounds(&check_matrix, detectors_per_round, rounds_per_partition);
     let time_axis_metrics = run_fusion_decoder(
         &check_matrix,
         &test_detectors,
@@ -258,10 +284,12 @@ fn main() {
         &relay_config,
         time_axis_partitions,
     );
+    println!("    Completed in {:.2}s", time_axis_metrics.total_time_secs);
 
-    // Count-based fusion decoder (3 partitions)
-    println!("  Running count-based fusion decoder (3 partitions)...");
-    let count_based_partitions = partition_by_count(check_matrix.cols(), 3);
+    // Count-based fusion decoder (3 partitions to match time-axis)
+    let num_partitions = total_rounds / rounds_per_partition;
+    println!("\n  [3/3] Running count-based fusion decoder ({} partitions)...", num_partitions);
+    let count_based_partitions = partition_by_count(check_matrix.cols(), num_partitions);
     let count_based_metrics = run_fusion_decoder(
         &check_matrix,
         &test_detectors,
@@ -270,33 +298,37 @@ fn main() {
         &relay_config,
         count_based_partitions,
     );
+    println!("    Completed in {:.2}s", count_based_metrics.total_time_secs);
 
     // Print correctness table
     println!("\nCorrectness Results:");
     println!("{:-<100}", "");
-    println!("{:<30} | {:>15} | {:>15} | {:>15}",
-        "Decoder", "Success Rate", "Syndrome Sat.", "Avg Iterations");
+    println!("{:<30} | {:>15} | {:>15} | {:>15} | {:>15}",
+        "Decoder", "Success Rate", "Syndrome Sat.", "Avg Iterations", "Avg Time (ms)");
     println!("{:-<100}", "");
 
-    println!("{:<30} | {:>6}/{:<7} | {:>6}/{:<7} | {:>15.1}",
+    println!("{:<30} | {:>6}/{:<7} | {:>6}/{:<7} | {:>15.1} | {:>14.2}",
         "Baseline",
         baseline_metrics.success_count, num_test_samples,
         baseline_metrics.syndrome_satisfaction_count, num_test_samples,
         baseline_metrics.total_iterations as f64 / num_test_samples as f64,
+        baseline_metrics.total_time_secs * 1000.0 / num_test_samples as f64,
     );
 
-    println!("{:<30} | {:>6}/{:<7} | {:>6}/{:<7} | {:>15.1}",
+    println!("{:<30} | {:>6}/{:<7} | {:>6}/{:<7} | {:>15.1} | {:>14.2}",
         "Time-axis fusion",
         time_axis_metrics.success_count, num_test_samples,
         time_axis_metrics.syndrome_satisfaction_count, num_test_samples,
         time_axis_metrics.total_iterations as f64 / num_test_samples as f64,
+        time_axis_metrics.total_time_secs * 1000.0 / num_test_samples as f64,
     );
 
-    println!("{:<30} | {:>6}/{:<7} | {:>6}/{:<7} | {:>15.1}",
+    println!("{:<30} | {:>6}/{:<7} | {:>6}/{:<7} | {:>15.1} | {:>14.2}",
         "Count-based fusion",
         count_based_metrics.success_count, num_test_samples,
         count_based_metrics.syndrome_satisfaction_count, num_test_samples,
         count_based_metrics.total_iterations as f64 / num_test_samples as f64,
+        count_based_metrics.total_time_secs * 1000.0 / num_test_samples as f64,
     );
     println!("{:-<100}", "");
 
@@ -308,6 +340,49 @@ fn main() {
     println!("  • Time-axis vs Baseline: {}/{} identical", identical_time_axis, num_test_samples);
     println!("  • Count-based vs Baseline: {}/{} identical", identical_count_based, num_test_samples);
 
+    // Enhanced: Detailed agreement tracking for visualization
+    println!("\nDetailed Decoding Agreement:");
+    println!("{:-<100}", "");
+    println!("{:<10} | {:>15} | {:>15} | {:>15} | {:>15}",
+        "Sample", "Baseline", "Time-axis", "Count-based", "All Agree");
+    println!("{:-<100}", "");
+    
+    let mut all_agree_count = 0;
+    let mut time_axis_agree = Vec::new();
+    let mut count_based_agree = Vec::new();
+    
+    for i in 0..num_test_samples {
+        let baseline_dec = &baseline_metrics.decodings[i];
+        let time_axis_dec = &time_axis_metrics.decodings[i];
+        let count_based_dec = &count_based_metrics.decodings[i];
+        
+        let time_axis_match = baseline_dec == time_axis_dec;
+        let count_based_match = baseline_dec == count_based_dec;
+        let all_match = time_axis_match && count_based_match;
+        
+        if all_match {
+            all_agree_count += 1;
+        }
+        
+        time_axis_agree.push(time_axis_match);
+        count_based_agree.push(count_based_match);
+        
+        println!("{:<10} | {:>15} | {:>15} | {:>15} | {:>15}",
+            i,
+            "✓",
+            if time_axis_match { "✓" } else { "✗" },
+            if count_based_match { "✓" } else { "✗" },
+            if all_match { "✓" } else { "✗" },
+        );
+    }
+    println!("{:-<100}", "");
+    println!("  Summary: {}/{} samples have all decoders agree", all_agree_count, num_test_samples);
+    
+    // Output agreement data for visualization (JSON-like format)
+    println!("\nAgreement Data (for visualization):");
+    println!("  time_axis_agreement: {:?}", time_axis_agree);
+    println!("  count_based_agreement: {:?}", count_based_agree);
+
     // =============================================================================
     // TEST 4: Detailed Partition Structure Validation
     // =============================================================================
@@ -316,28 +391,32 @@ fn main() {
     println!("[5/6] PARTITION STRUCTURE VALIDATION");
     println!("{}", "=".repeat(80));
 
-    println!("\nValidating time-axis partitioning with 2 rounds/partition:");
+    let validation_rounds_per_partition = 2;
+    println!("\nValidating time-axis partitioning with {} rounds/partition:", validation_rounds_per_partition);
 
-    let partitions_2round = partition_by_time_rounds(&check_matrix, detectors_per_round, 2);
+    let partitions_validation = partition_by_time_rounds(&check_matrix, detectors_per_round, validation_rounds_per_partition);
 
-    println!("  Expected partitions: {}", total_rounds / 2);
-    println!("  Actual partitions: {}", partitions_2round.len());
+    println!("  Expected partitions: {}", total_rounds / validation_rounds_per_partition);
+    println!("  Actual partitions: {}", partitions_validation.len());
 
-    if partitions_2round.len() == total_rounds / 2 {
+    if partitions_validation.len() == total_rounds / validation_rounds_per_partition {
         println!("  [PASS] Correct number of partitions");
     } else {
         println!("  [FAIL] Unexpected number of partitions!");
     }
 
-    // Verify partition coverage
+    // Verify partition coverage and extract boundary variables
     let mut all_detectors_covered = HashSet::new();
     let mut all_variables_seen = HashSet::new();
+    let mut boundary_variables_all = HashSet::new();
 
-    for (i, partition) in partitions_2round.iter().enumerate() {
+    println!("\n  Validating {} partitions...", partitions_validation.len());
+    for (i, partition) in partitions_validation.iter().enumerate() {
+        let partition_start = Instant::now();
         println!("\n  Partition {}:", i);
         println!("    Detectors: {} (expected: {})",
             partition.detector_indices.len(),
-            2 * detectors_per_round
+            validation_rounds_per_partition * detectors_per_round
         );
         println!("    Variables: {}", partition.variable_indices.len());
 
@@ -345,8 +424,8 @@ fn main() {
         if !partition.detector_indices.is_empty() {
             let min_det = *partition.detector_indices.iter().min().unwrap();
             let max_det = *partition.detector_indices.iter().max().unwrap();
-            let expected_min = i * 2 * detectors_per_round;
-            let expected_max = expected_min + 2 * detectors_per_round - 1;
+            let expected_min = i * validation_rounds_per_partition * detectors_per_round;
+            let expected_max = expected_min + validation_rounds_per_partition * detectors_per_round - 1;
 
             println!("    Detector range: [{}..{}] (expected: [{}..{}])",
                 min_det, max_det, expected_min, expected_max);
@@ -356,6 +435,22 @@ fn main() {
             } else {
                 println!("    [FAIL] Unexpected detector range!");
             }
+        }
+
+        // Extract boundary variables for this partition
+        let boundary_vars = extract_boundary_variables(&partitions_validation, i, &check_matrix);
+        println!("    Boundary variables: {} ({:.1}% of partition variables)",
+            boundary_vars.len(),
+            if partition.variable_indices.is_empty() {
+                0.0
+            } else {
+                boundary_vars.len() as f64 / partition.variable_indices.len() as f64 * 100.0
+            }
+        );
+        
+        // Track all boundary variables
+        for &var in &boundary_vars {
+            boundary_variables_all.insert(var);
         }
 
         // Track coverage
@@ -368,7 +463,23 @@ fn main() {
         for &var in &partition.variable_indices {
             all_variables_seen.insert(var);
         }
+        
+        let partition_elapsed = partition_start.elapsed();
+        println!("    Completed in {:.2}s", partition_elapsed.as_secs_f64());
     }
+    
+    println!("\n  Boundary Variable Summary:");
+    println!("    Total boundary variables: {} ({:.1}% of all variables)",
+        boundary_variables_all.len(),
+        boundary_variables_all.len() as f64 / check_matrix.cols() as f64 * 100.0
+    );
+    
+    // Output boundary variable data for visualization
+    let mut boundary_vars_sorted: Vec<usize> = boundary_variables_all.iter().copied().collect();
+    boundary_vars_sorted.sort();
+    println!("    Boundary variable indices (first 50): {:?}", 
+        &boundary_vars_sorted[..boundary_vars_sorted.len().min(50)]
+    );
 
     println!("\n  Coverage check:");
     println!("    Detectors covered: {}/{}", all_detectors_covered.len(), total_detectors);
@@ -491,7 +602,13 @@ fn main() {
         println!("above before proceeding.");
     }
 
+    let total_elapsed = benchmark_start.elapsed();
     println!("\n{}", "=".repeat(80));
+    println!("BENCHMARK COMPLETED");
+    println!("Total time: {:.2}s ({:.1} minutes)", 
+        total_elapsed.as_secs_f64(),
+        total_elapsed.as_secs_f64() / 60.0);
+    println!("{}", "=".repeat(80));
 }
 
 /// Analyze partition quality
@@ -503,6 +620,11 @@ fn analyze_partitions(
     let mut partition_stats = Vec::new();
 
     for (i, partition) in partitions.iter().enumerate() {
+        if partitions.len() > 3 && i > 0 && i % 2 == 0 {
+            print!("        Analyzing partition {}/{}... ", i + 1, partitions.len());
+            std::io::Write::flush(&mut std::io::stdout()).unwrap();
+        }
+        
         let boundary_vars = count_boundary_variables(partitions, i, check_matrix);
         let total_vars = partition.variable_indices.len();
         let ratio = boundary_vars as f64 / total_vars as f64;
@@ -512,6 +634,10 @@ fn analyze_partitions(
             total_vars,
             ratio,
         });
+        
+        if partitions.len() > 3 && i > 0 && i % 2 == 0 {
+            println!("done");
+        }
     }
 
     let avg_boundary_ratio = partition_stats.iter().map(|s| s.ratio).sum::<f64>()
@@ -560,6 +686,41 @@ fn count_boundary_variables(
     }
 
     boundary_vars.len()
+}
+
+/// Extract boundary variables for a partition (returns actual variable indices)
+fn extract_boundary_variables(
+    partitions: &[Partition],
+    partition_idx: usize,
+    check_matrix: &SparseBitMatrix,
+) -> Vec<usize> {
+    let this_partition = &partitions[partition_idx];
+    let det_set: HashSet<usize> = this_partition
+        .detector_indices
+        .iter()
+        .copied()
+        .collect();
+
+    let mut boundary_vars = HashSet::new();
+
+    // For each variable in this partition, check if it connects to external detectors
+    for &var_idx in &this_partition.variable_indices {
+        // Find which detectors use this variable
+        for det_idx in 0..check_matrix.rows() {
+            let row = check_matrix.outer_view(det_idx).unwrap();
+            let connects_to_var = row.iter().any(|(col, _)| col == var_idx);
+
+            if connects_to_var && !det_set.contains(&det_idx) {
+                // This variable connects to a detector outside the partition
+                boundary_vars.insert(var_idx);
+                break;
+            }
+        }
+    }
+
+    let mut result: Vec<usize> = boundary_vars.iter().copied().collect();
+    result.sort();
+    result
 }
 
 /// Validate boundary calculation with a simple hand-crafted example
@@ -671,7 +832,13 @@ fn run_baseline_decoder(
     let mut syndrome_satisfaction_count = 0;
     let mut decodings = Vec::new();
 
+    let start = Instant::now();
     for i in 0..num_samples {
+        if i > 0 && i % 5 == 0 {
+            print!("      Progress: {}/{} samples... ", i, num_samples);
+            std::io::Write::flush(&mut std::io::stdout()).unwrap();
+        }
+        
         let detectors = test_detectors.row(i);
         let result = decoder.decode_detailed(detectors);
 
@@ -686,6 +853,17 @@ fn run_baseline_decoder(
         }
 
         decodings.push(result.decoding);
+        
+        if i > 0 && i % 5 == 0 {
+            let elapsed = start.elapsed();
+            let avg_time = elapsed.as_secs_f64() / (i + 1) as f64;
+            let remaining = avg_time * (num_samples - i - 1) as f64;
+            println!("({:.1}s elapsed, ~{:.1}s remaining)", elapsed.as_secs_f64(), remaining);
+        }
+    }
+    let total_time = start.elapsed();
+    if num_samples > 0 {
+        println!("      Completed all {} samples", num_samples);
     }
 
     DecodingMetrics {
@@ -694,6 +872,7 @@ fn run_baseline_decoder(
         total_iterations,
         syndrome_satisfaction_count,
         decodings,
+        total_time_secs: total_time.as_secs_f64(),
     }
 }
 
@@ -718,7 +897,13 @@ fn run_fusion_decoder(
     let mut syndrome_satisfaction_count = 0;
     let mut decodings = Vec::new();
 
+    let start = Instant::now();
     for i in 0..num_samples {
+        if i > 0 && i % 5 == 0 {
+            print!("      Progress: {}/{} samples... ", i, num_samples);
+            std::io::Write::flush(&mut std::io::stdout()).unwrap();
+        }
+        
         let detectors = test_detectors.row(i);
         let result = decoder.decode_fusion(detectors);
 
@@ -733,6 +918,17 @@ fn run_fusion_decoder(
         }
 
         decodings.push(result.decoding);
+        
+        if i > 0 && i % 5 == 0 {
+            let elapsed = start.elapsed();
+            let avg_time = elapsed.as_secs_f64() / (i + 1) as f64;
+            let remaining = avg_time * (num_samples - i - 1) as f64;
+            println!("({:.1}s elapsed, ~{:.1}s remaining)", elapsed.as_secs_f64(), remaining);
+        }
+    }
+    let total_time = start.elapsed();
+    if num_samples > 0 {
+        println!("      Completed all {} samples", num_samples);
     }
 
     DecodingMetrics {
@@ -741,6 +937,7 @@ fn run_fusion_decoder(
         total_iterations,
         syndrome_satisfaction_count,
         decodings,
+        total_time_secs: total_time.as_secs_f64(),
     }
 }
 

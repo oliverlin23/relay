@@ -1,0 +1,87 @@
+{
+  "partition_analyses": [
+    {
+      "strategy": "Time-axis (1 rounds/partition)",
+      "num_partitions": 6,
+      "avg_boundary_ratio": 0.932,
+      "max_boundary_ratio": 0.9690000000000001,
+      "min_boundary_ratio": 0.85
+    },
+    {
+      "strategy": "Time-axis (2 rounds/partition)",
+      "num_partitions": 3,
+      "avg_boundary_ratio": 0.639,
+      "max_boundary_ratio": 0.8029999999999999,
+      "min_boundary_ratio": 0.545
+    },
+    {
+      "strategy": "Time-axis (3 rounds/partition)",
+      "num_partitions": 2,
+      "avg_boundary_ratio": 0.39399999999999996,
+      "max_boundary_ratio": 0.4,
+      "min_boundary_ratio": 0.387
+    },
+    {
+      "strategy": "Count-based (6 partitions)",
+      "num_partitions": 6,
+      "avg_boundary_ratio": 1.0,
+      "max_boundary_ratio": 1.0,
+      "min_boundary_ratio": 1.0
+    },
+    {
+      "strategy": "Count-based (3 partitions)",
+      "num_partitions": 3,
+      "avg_boundary_ratio": 1.0,
+      "max_boundary_ratio": 1.0,
+      "min_boundary_ratio": 1.0
+    },
+    {
+      "strategy": "Count-based (2 partitions)",
+      "num_partitions": 2,
+      "avg_boundary_ratio": 1.0,
+      "max_boundary_ratio": 1.0,
+      "min_boundary_ratio": 1.0
+    }
+  ],
+  "baseline_metrics": {
+    "success_count": 20,
+    "total_samples": 20,
+    "syndrome_satisfaction": 20,
+    "avg_iterations": 75.2,
+    "avg_time_ms": 79.41
+  },
+  "time_axis_metrics": {
+    "success_count": 20,
+    "total_samples": 20,
+    "syndrome_satisfaction": 20,
+    "avg_iterations": 98.7,
+    "avg_time_ms": 3296.77
+  },
+  "count_based_metrics": {
+    "success_count": 20,
+    "total_samples": 20,
+    "syndrome_satisfaction": 20,
+    "avg_iterations": 98.7,
+    "avg_time_ms": 1827.3
+  },
+  "validation_results": {},
+  "code_info": {
+    "distance": 6,
+    "logical_qubits": 12,
+    "physical_qubits": 72,
+    "num_detectors": 432,
+    "num_variables": 16164,
+    "detectors_per_round": 72,
+    "total_rounds": 6
+  },
+  "agreement": {
+    "time_axis_vs_baseline": {
+      "identical": 17,
+      "total": 20
+    },
+    "count_based_vs_baseline": {
+      "identical": 17,
+      "total": 20
+    }
+  }
+}
